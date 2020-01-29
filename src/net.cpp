@@ -21,6 +21,8 @@
 #include <ui_interface.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
+#include <blockencodings.h>
+#include <netmessagemaker.h>
 
 #ifdef WIN32
 #include <string.h>
@@ -89,6 +91,22 @@ CCriticalSection cs_mapLocalHost;
 std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(cs_mapLocalHost);
 static bool vfLimited[NET_MAX] GUARDED_BY(cs_mapLocalHost) = {};
 std::string strSubVersion;
+
+CBlockHeaderAndShortTxIDs send_CMPCTBLOCK(char* chrBlk){
+	std::string tmp(chrBlk);
+	std::string tmp1=tmp.substr(0,3);
+	std::string tmp2=tmp.substr(3);
+	LogPrint(BCLog::NET,"1st part: %s, 2nd part: %s\n",tmp1,tmp2);
+	if(tmp1!="lin"){
+		LogPrint(BCLog::NET,"WRONG LIN MSG RCVD\n");
+		CBlockHeaderAndShortTxIDs emptyBlk;
+		return emptyBlk;
+	}
+	CDataStream vRecv(ParseHex(tmp2),SER_NETWORK,PROTOCOL_VERSION);
+	CBlockHeaderAndShortTxIDs pblock;
+	vRecv >> pblock;
+	return pblock;
+}
 
 void CConnman::AddOneShot(const std::string& strDest)
 {
@@ -454,6 +472,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
 
 void CNode::CloseSocketDisconnect()
 {
+    LogPrint(BCLog::NET,"CloseSocketDisconnect\n");
     fDisconnect = true;
     LOCK(cs_hSocket);
     if (hSocket != INVALID_SOCKET)
@@ -570,6 +589,8 @@ bool CNode::ReceiveMsgBytes(const char *pch, unsigned int nBytes, bool& complete
     LOCK(cs_vRecv);
     nLastRecv = nTimeMicros / 1000000;
     nRecvBytes += nBytes;
+    LogPrint(BCLog::NET,"Recv Msg Bytes: %d\n",nBytes);
+    bool tmp1;
     while (nBytes > 0) {
         // absorb network data
         int handled = m_deserializer->Read(pch, nBytes);
@@ -578,7 +599,8 @@ bool CNode::ReceiveMsgBytes(const char *pch, unsigned int nBytes, bool& complete
         pch += handled;
         nBytes -= handled;
 
-        if (m_deserializer->Complete()) {
+        tmp1 = m_deserializer->Complete();
+        if (tmp1) {
             // decompose a transport agnostic CNetMessage from the deserializer
             CNetMessage msg = m_deserializer->GetMessage(Params().MessageStart(), nTimeMicros);
 
@@ -714,6 +736,83 @@ CNetMessage V1TransportDeserializer::GetMessage(const CMessageHeader::MessageSta
     // reset the network deserializer (prepare for the next message)
     Reset();
     return msg;
+}
+
+CNetMessage mrlnDsrlzr::GetMessage(const CMessageHeader::MessageStartChars& message_start, int64_t time){
+}
+
+int mrlnDsrlzr::did_recv_bytes(
+        std::string &&bytes
+    )
+{
+/*
+    LogPrint(BCLog::NET,"did_recv_bytes: %d\n", bytes.size());
+ 
+    if(bytes.size() == 0) return 0;
+
+    if(buf == nullptr) { // Read length
+	LogPrintf("{=== NULL case ===}\n");
+        if(bytes.size() + size < 8) { // Partial length
+            for(size_t i = 0; i < bytes.size(); i++) {
+                length = (length << 8) | (uint8_t) bytes[i];
+            }
+            size += bytes.size();
+        } else { // Full length
+            for(size_t i = 0; i < 8 - size; i++) {
+                length = (length << 8) | (uint8_t) bytes[i];
+            }
+            bytes = bytes.substr(8 - size);
+
+            if(length > 5000000) { // Abort on big message, DoS prevention
+                LogPrintf("Message too big: %d\n", length);
+                return -1;
+            }
+
+            // Prepare to process message
+            buf = new char[length];
+            size = 0;
+
+            // Process remaining bytes
+            did_recv_bytes(std::move(bytes));
+        }
+    } else { // Read message
+	LogPrintf("{=== Dcb : Data read ===}\n");
+        if(bytes.size() + size < length) { // Partial message
+            std::memcpy(buf + size, bytes.c_str(), bytes.size());
+            size += bytes.size();
+        } else { // Full message
+            std::memcpy(buf + size, bytes.c_str(), length - size);
+            bytes = bytes.substr(length - size);
+
+            // Prepare to process length
+            buf = nullptr;
+            size = 0;
+            length = 0;
+
+            // Process remaining bytes
+            did_recv_bytes(std::move(bytes));
+        }
+    }
+
+    std::string tmp1 = "0x";
+    CBlock pblock;
+    CDataStream vRecv(ParseHex(tmp1),SER_NETWORK,PROTOCOL_VERSION);
+    vRecv >> pblock;
+    std::shared_ptr<const CBlockHeaderAndShortTxIDs> pcmpctblock = std::make_shared<const CBlockHeaderAndShortTxIDs> (pblock, true);
+
+    // reset the network deserializer (prepare for the next message)
+    Reset();
+
+    const CNetMsgMaker msgMaker(PROTOCOL_VERSION);
+
+    LOCK(cs_main);
+
+    ForEachNode([&pcmpctblock,&msgMaker](CNode* pnode){
+        AssertLockHeld(cs_main);
+        PushMessage(pnode,msgMaker.Make(NetMsgType::CMPCTBLOCK,*pcmpctblock));
+    });
+*/
+    return 0;
 }
 
 size_t CConnman::SocketSendData(CNode *pnode) const EXCLUSIVE_LOCKS_REQUIRED(pnode->cs_vSend)
@@ -923,6 +1022,7 @@ bool CConnman::AttemptToEvictConnection()
 }
 
 void CConnman::AcceptConnection(const ListenSocket& hListenSocket) {
+    LogPrint(BCLog::NET,"Reached Accept Connection\n");
     struct sockaddr_storage sockaddr;
     socklen_t len = sizeof(sockaddr);
     SOCKET hSocket = accept(hListenSocket.socket, (struct sockaddr*)&sockaddr, &len);
@@ -1018,7 +1118,7 @@ void CConnman::AcceptConnection(const ListenSocket& hListenSocket) {
     pnode->m_prefer_evict = bannedlevel > 0;
     m_msgproc->InitializeNode(pnode);
 
-    LogPrint(BCLog::NET, "connection from %s accepted\n", addr.ToString());
+    LogPrint(BCLog::NET, "connection from %s accepted peer: %d\n", addr.ToString(),pnode->GetId());
 
     {
         LOCK(cs_vNodes);
@@ -1050,6 +1150,7 @@ void CConnman::DisconnectNodes()
         {
             if (pnode->fDisconnect)
             {
+                LogPrint(BCLog::NET,"fDisconnect\n");
                 // remove from vNodes
                 vNodes.erase(remove(vNodes.begin(), vNodes.end(), pnode), vNodes.end());
 
@@ -1341,6 +1442,7 @@ void CConnman::SocketHandler()
         bool recvSet = false;
         bool sendSet = false;
         bool errorSet = false;
+	bool mrlnNode = (pnode->addr.ToString()=="127.0.0.1:8043");
         {
             LOCK(pnode->cs_hSocket);
             if (pnode->hSocket == INVALID_SOCKET)
@@ -1352,7 +1454,7 @@ void CConnman::SocketHandler()
         if (recvSet || errorSet)
         {
             // typical socket buffer is 8K-64K
-            char pchBuf[0x10000];
+            char pchBuf[0x10000];//65536
             int nBytes = 0;
             {
                 LOCK(pnode->cs_hSocket);
@@ -1363,8 +1465,21 @@ void CConnman::SocketHandler()
             if (nBytes > 0)
             {
                 bool notify = false;
-                if (!pnode->ReceiveMsgBytes(pchBuf, nBytes, notify))
+                bool tmp1;
+                tmp1 = pnode->ReceiveMsgBytes(pchBuf,nBytes,notify);
+                LogPrint(BCLog::NET,"Not: %d\n",notify);
+                if(mrlnNode){ //pnode->sendcmpct state change check from NodeID
+                        LogPrint(BCLog::NET,"Manual Sending packets\n");
+                        CNetMsgMaker msgMaker(PROTOCOL_VERSION);
+                        ForEachNode([&](CNode* pnode){
+                                LogPrint(BCLog::NET,"Node Id : %d\n",pnode->GetId());
+                                PushMessage(pnode,msgMaker.Make(NetMsgType::CMPCTBLOCK,send_CMPCTBLOCK(pchBuf)));
+                        });
+                }
+                if (!tmp1 && !mrlnNode) {
                     pnode->CloseSocketDisconnect();
+                    LogPrint(BCLog::NET,"nBytes>0\n");
+                }
                 RecordBytesRecv(nBytes);
                 if (notify) {
                     size_t nSizeAdded = 0;
@@ -1380,10 +1495,11 @@ void CConnman::SocketHandler()
                         pnode->nProcessQueueSize += nSizeAdded;
                         pnode->fPauseRecv = pnode->nProcessQueueSize > nReceiveFloodSize;
                     }
+                    LogPrint(BCLog::NET,"vProcsMsg: %d\n", pnode->vProcessMsg.size());
                     WakeMessageHandler();
                 }
             }
-            else if (nBytes == 0)
+            else if (nBytes == 0 && !mrlnNode)
             {
                 // socket closed gracefully
                 if (!pnode->fDisconnect) {
@@ -1397,6 +1513,7 @@ void CConnman::SocketHandler()
                 int nErr = WSAGetLastError();
                 if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
                 {
+                    LogPrint(BCLog::NET,"nBytes<0\n");
                     if (!pnode->fDisconnect) {
                         LogPrint(BCLog::NET, "socket recv error for peer=%d: %s\n", pnode->GetId(), NetworkErrorString(nErr));
                     }
@@ -1445,7 +1562,11 @@ void CConnman::WakeMessageHandler()
     condMsgProc.notify_one();
 }
 
-
+void CConnman::SendToMarlin(const char* data, size_t len)
+{
+    LogPrint(BCLog::NET,"Sent To Marlin\n");
+    sendto(mrlnclntSckt,data,len,0,(struct sockaddr *)&mrlnsrvrAddr, addr_size);
+}
 
 
 
@@ -2703,6 +2824,9 @@ CNode::CNode(NodeId idIn, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn
     }
 
     m_deserializer = MakeUnique<V1TransportDeserializer>(V1TransportDeserializer(Params().MessageStart(), SER_NETWORK, INIT_PROTO_VERSION));
+
+    if(addr.ToString() == "127.0.0.1:8043")
+	    m_deserializer = MakeUnique<mrlnDsrlzr>(mrlnDsrlzr());
 }
 
 CNode::~CNode()

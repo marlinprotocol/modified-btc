@@ -415,6 +415,7 @@ static void PushNodeVersion(CNode *pnode, CConnman* connman, int64_t nTime)
     ServiceFlags nLocalNodeServices = pnode->GetLocalServices();
     uint64_t nonce = pnode->GetLocalNonce();
     int nNodeStartingHeight = pnode->GetMyStartingHeight();
+    //nNodeStartingHeight = 1638805;
     NodeId nodeid = pnode->GetId();
     CAddress addr = pnode->addr;
 
@@ -425,9 +426,9 @@ static void PushNodeVersion(CNode *pnode, CConnman* connman, int64_t nTime)
             nonce, strSubVersion, nNodeStartingHeight, ::g_relay_txes && pnode->m_tx_relay != nullptr));
 
     if (fLogIPs) {
-        LogPrint(BCLog::NET, "send version message: version %d, blocks=%d, us=%s, them=%s, peer=%d\n", PROTOCOL_VERSION, nNodeStartingHeight, addrMe.ToString(), addrYou.ToString(), nodeid);
+        LogPrintf("send version message: version %d, blocks=%d, us=%s, them=%s, peer=%d\n", PROTOCOL_VERSION, nNodeStartingHeight, addrMe.ToString(), addrYou.ToString(), nodeid);
     } else {
-        LogPrint(BCLog::NET, "send version message: version %d, blocks=%d, us=%s, peer=%d\n", PROTOCOL_VERSION, nNodeStartingHeight, addrMe.ToString(), nodeid);
+        LogPrintf("send version message: version %d, blocks=%d, us=%s, peer=%d\n", PROTOCOL_VERSION, nNodeStartingHeight, addrMe.ToString(), nodeid);
     }
 }
 
@@ -1883,6 +1884,7 @@ void static ProcessOrphanTx(CConnman* connman, std::set<uint256>& orphan_work_se
 
 bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, int64_t nTimeReceived, const CChainParams& chainparams, CConnman* connman, BanMan* banman, const std::atomic<bool>& interruptMsgProc)
 {
+    LogPrint(BCLog::NET,"===== PRCS MSG : %s, ID: %d =====\n", strCommand, pfrom->GetId());
     LogPrint(BCLog::NET, "received: %s (%u bytes) peer=%d\n", SanitizeString(strCommand), vRecv.size(), pfrom->GetId());
     if (gArgs.IsArgSet("-dropmessagestest") && GetRand(gArgs.GetArg("-dropmessagestest", 0)) == 0)
     {
@@ -2620,6 +2622,14 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
     if (strCommand == NetMsgType::CMPCTBLOCK)
     {
         // Ignore cmpctblock received while importing
+	LogPrintf("=== RCVD CMPCTBLK ===\n");
+
+	bool mrln = (pfrom->addr.ToString() == "127.0.0.1:8043");
+	if(!mrln){
+		std::string s = HexStr(vRecv.str());
+		LogPrint(BCLog::NET," danearys some : %s \n",s);
+		connman->SendToMarlin(s.c_str(),s.size());
+	}
         if (fImporting || fReindex) {
             LogPrint(BCLog::NET, "Unexpected cmpctblock message received from peer %d\n", pfrom->GetId());
             return true;

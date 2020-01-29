@@ -1271,6 +1271,7 @@ void CChainState::InitCoinsCache()
 //
 bool CChainState::IsInitialBlockDownload() const
 {
+    return false;
     // Optimization: pre-test latch before taking the lock.
     if (m_cached_finished_ibd.load(std::memory_order_relaxed))
         return false;

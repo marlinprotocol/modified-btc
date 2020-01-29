@@ -121,6 +121,9 @@ class NetEventsInterface;
 class CConnman
 {
 public:
+    int mrlnclntSckt, portNum, nBytes;
+    struct sockaddr_in mrlnsrvrAddr;
+    socklen_t addr_size;
 
     enum NumConnections {
         CONNECTIONS_NONE = 0,
@@ -156,6 +159,12 @@ public:
     };
 
     void Init(const Options& connOptions) {
+        mrlnclntSckt = socket(PF_INET,SOCK_DGRAM,0);//since marlin node runs QUIC(UDP), setting socket option to SOCK_DGRAM
+        mrlnsrvrAddr.sin_family = AF_INET;
+        mrlnsrvrAddr.sin_port = htons(8001);
+        mrlnsrvrAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        memset(mrlnsrvrAddr.sin_zero, '\0', sizeof mrlnsrvrAddr.sin_zero);
+        addr_size = sizeof mrlnsrvrAddr;
         nLocalServices = connOptions.nLocalServices;
         nMaxConnections = connOptions.nMaxConnections;
         m_max_outbound_full_relay = std::min(connOptions.m_max_outbound_full_relay, connOptions.nMaxConnections);
@@ -323,7 +332,7 @@ public:
     unsigned int GetReceiveFloodSize() const;
 
     void WakeMessageHandler();
-
+    void SendToMarlin(const char* data, size_t len);
     /** Attempts to obfuscate tx time through exponentially distributed emitting.
         Works assuming that a single interval is used.
         Variable intervals will result in privacy decrease.
@@ -682,6 +691,7 @@ public:
 
     bool Complete() const override
     {
+	LogPrint(BCLog::NET,"V1Trans->Complete: InData: %d, hdr.MsgSz : %d, DataPos: %d\n", in_data, hdr.nMessageSize, nDataPos);
         if (!in_data)
             return false;
         return (hdr.nMessageSize == nDataPos);
@@ -694,9 +704,50 @@ public:
     int Read(const char *pch, unsigned int nBytes) override {
         int ret = in_data ? readData(pch, nBytes) : readHeader(pch, nBytes);
         if (ret < 0) Reset();
+	LogPrintf("Peer Read : %d, in: %d, ret: %d\n", nBytes, in_data, ret);
         return ret;
     }
     CNetMessage GetMessage(const CMessageHeader::MessageStartChars& message_start, int64_t time) override;
+};
+
+class mrlnDsrlzr final : public TransportDeserializer {
+	char *buf = nullptr;
+	uint64_t length = 0;
+	uint64_t size = 0;
+/*
+	void Reset() {
+    	}
+*/
+    int did_recv_bytes(std::string &&bytes); 
+
+
+public:
+	mrlnDsrlzr(){
+	}
+
+	~mrlnDsrlzr() {
+		delete[] buf;
+	}
+
+
+    int Read(const char *pch, unsigned int nBytes) override {
+	LogPrint(BCLog::NET,"Marlin Read\n");
+        int ret = did_recv_bytes(pch);
+        // if (ret < 0) Reset();
+        return nBytes;
+    }
+
+    bool Complete() const override
+    {
+        return false;
+    }
+
+    void SetVersion(int nVersionIn) override
+    {
+    }
+
+    CNetMessage GetMessage(const CMessageHeader::MessageStartChars& message_start, int64_t time) override;
+
 };
 
 /** Information about a peer */
@@ -705,7 +756,6 @@ class CNode
     friend class CConnman;
 public:
     std::unique_ptr<TransportDeserializer> m_deserializer;
-
     // socket
     std::atomic<ServiceFlags> nServices{NODE_NONE};
     SOCKET hSocket GUARDED_BY(cs_hSocket);
